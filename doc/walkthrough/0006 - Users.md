@@ -154,13 +154,20 @@ Change the POST branch of your login handler to this:
 
 ```go
 rUsername := r.FormValue("username")
-cookie := http.Cookie{Name: "cafego_username", Value: rUsername}
+cookie := http.Cookie{Name: "cafego_username", Value: rUsername, Path: "/"}
 http.SetCookie(w, &cookie)
+// Then, redirect user to the home page
+http.Redirect(w, r, "/", http.StatusFound)
 ```
 
-Clear enough, but we should go over what this `&` symbol means.
+Clear enough. There are two potential footguns here:
+
+- You explicit need to set the `Path` property of an `http.Cookie` to "/" if you want the cookie to be retrievable on all paths. When writing this for the first time, I was confused why the cookie was not showing up on the index page even though I had set it correctly on the login page. This is why.
+- `http.SetCookie` needs the _address_ of an `http.Cookie`, not the cookie itself. We will go over what this means in the next subsection here.
 
 ### A tangent on pointers
+
+We should go over what this `&` symbol means.
 
 Many languages, including Go, differentiate between _values_ and _references_ to those values. By default, most things in Go are values.
 
@@ -192,6 +199,196 @@ I saw this explanation on Reddit some time ago. I hope they don't take this imag
 
 In a lot of Go programs, pointers pop up sometimes, but not all the time. You will occasionally see things like how `http.SetCookie` takes a `*http.Cookie`, not an `http.Cookie`. This means that the function is asking for a _pointer_ to the data, not the data itself. That is why we need to use the `&` operator to fetch the address of our cookie.
 
-This also explains what `r` is in our route handlers. `r` is actually a _pointer_ to an `http.Request`, not the `http.Request` itself.
+This also explains what `r` is in our route handlers. `r` is actually a _pointer_ to an `http.Request`, not the `http.Request` itself. We have not had to de-reference the pointer to `r` so far because Go usually automatically de-references things for us.
 
-We have not had to de-reference the pointer to `r` so far because Go usually automatically de-references things for us.
+Pointers are a huge part of lower-level (i.e., closer to the machine) languages like C, but higher-level languages usually try to limit their use. Overusing references tends to tie or complect things together. It is best to stick to bare values where possible.
+
+## Reading the cookie
+
+Remember our index page? We have a small snippet that displays a username. Let's swap it out from the dummy username to use the username stored in the cookie.
+
+In `templates/index.html`, add the following code to only render the username snippet if it isn't a zero-value (i.e., "" or nil). While we're at it, we may as well add a link to login.
+
+```html
+{{ if .Username }}
+    <p>Welcome, {{ .Username }}!</p>
+{{ end }}
+<a href="/login">Login</a>
+```
+
+Change the index handler to read the cookie. This one will be a bit verbose, because we'll need to actually go through the cookies slice to find what we need. _Go figure..._
+
+```go
+// Remember that if sampleUsername is not shadowed, it will be the zero-value of a string, "".
+var sampleUsername string
+for _, cookie := range cookies {
+    if cookie.Name == "cafego_username" {
+        sampleUsername = cookie.Value
+        break
+    }
+}
+```
+
+If you log in now, you should be able to see the username you input.
+
+That's not a very secure login. We can somewhat trivially add a guard to our login handler to check if the user's credentials at least match any that are in our database.
+
+```go
+// In the POST arm of `loginHandler`
+rUsername := r.FormValue("username")
+rPassword := r.FormValue("password")
+var user User
+for _, u := range getUsers() {
+    if (rUsername == u.Username) && (rPassword == u.Password) {
+        user = u
+    }
+}
+if user == (User{}) {
+    fmt.Fprint(w, "Invalid login. Please go back and try again.")
+    return
+}
+cookie := http.Cookie{Name: "cafego_username", Value: rUsername, Path: "/"}
+http.SetCookie(w, &cookie)
+http.Redirect(w, r, "/", http.StatusFound)
+```
+
+It's not great, but it's something.
+
+## Sessions
+
+We've established that we can set and get cookies, but our cookie is currently the username of a user. This is horribly insecure. If we base our security decisions on whether we can find a username cookie, an attacker can simply set the cookie to someone's username to act as their account.
+
+In this subsection, we'll try to refactor our web app to use sessions instead of usernames as cookie data. Sessions are supposed to be meaningless, easy to control, easy to revoke, and difficult to guess, so they are a much more secure way to identify users across requests.
+
+In our database file, we can create a new type to represent sessions.
+
+```go
+type Session struct {
+	Token  string
+	UserId int
+}
+```
+
+Now comes something different. We can define a package-level slice of Session objects that our other functions will be able to manipulate when needed.
+
+```go
+// Starts empty
+var sessions = []Session{}
+```
+
+I should note that this is a very poor practice in a real app, especially if many threads are expected to read from and write to the data at the same time, but it will serve our needs for now. We will transfer everything to a real database in the next section, anyway.
+
+To keep with the design principles so far, let's write a function that just returns the sessions to us. We will have to be disciplined and refrain from interacting with the underlying session data except through these functions.
+
+```go
+func getSessions() []Session {
+	return sessions
+}
+```
+
+We'll have to be careful with this one, because we're returning a slice, which is not "copied" in the way that you'd expect. If you get a slice from this function, if you change the slice from the calling function, the underlying slice will change.
+
+This isn't a Go thing, it's just a programming thing in general. You have to be conscious of value types and reference types.
+
+We know our intent is to associate sessions with user IDs, so let's write two more functions. The first function is to set a new session, and the second function is to get a user from a session token.
+
+```go
+// In database.go
+
+func setSession(token string, user User) {
+	sessions = append(sessions, Session{Token: token, UserId: user.Id})
+}
+
+func getUserFromSessionToken(token string) User {
+	var userId int
+	for _, session := range sessions {
+		if session.Token == token {
+			userId = session.UserId
+		}
+	}
+	for _, u := range getUsers() {
+		if u.Id == userId {
+			return u
+		}
+	}
+	return User{}
+}
+```
+
+We can now rewrite sections of our login handler and our index handler to use sessions.
+
+```go
+// In main.go
+
+// Here's how we'll generate a random session token.
+func generateSessionToken() string {
+	rawBytes := make([]byte, 16)
+	_, err := rand.Read(rawBytes)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(rawBytes)
+}
+
+func indexHandler(w http.ResponseWriter, r *http.Request) {
+	tmpl, err := template.ParseFiles("./templates/index.html")
+	if err != nil {
+		log.Fatal(err)
+	}
+	cookies := r.Cookies()
+	var sessionToken string
+	for _, cookie := range cookies {
+		if cookie.Name == "cafego_session" {
+			sessionToken = cookie.Value
+			break
+		}
+	}
+	user := getUserFromSessionToken(sessionToken)
+	sampleProducts := getProducts()
+	samplePageData := IndexPageData{Username: user.Username, Products: sampleProducts}
+	err = tmpl.Execute(w, samplePageData)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func loginHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		tmpl, err := template.ParseFiles("./templates/login.html")
+		if err != nil {
+			log.Fatal(err)
+		}
+		err = tmpl.Execute(w, nil)
+		if err != nil {
+			log.Fatal(err)
+		}
+	} else if r.Method == "POST" {
+		rUsername := r.FormValue("username")
+		rPassword := r.FormValue("password")
+		var user User
+		for _, u := range getUsers() {
+			if (rUsername == u.Username) && (rPassword == u.Password) {
+				user = u
+			}
+		}
+		if user == (User{}) {
+			fmt.Fprint(w, "Invalid login. Please go back and try again.")
+			return
+		}
+		// Set a session instead of a username
+		token := generateSessionToken()
+		setSession(token, user)
+		cookie := http.Cookie{Name: "cafego_session", Value: token, Path: "/"}
+		http.SetCookie(w, &cookie)
+		http.Redirect(w, r, "/", http.StatusFound)
+	}
+}
+```
+
+Now, if you log in with one of the users in your database, it should redirect you to the index page and greet you appropriately.
+
+Please also note that since we do not have a _persistent_ database, every time you reload your app, the sessions object will be reset to nothing. This won't affect us that badly right now, but it is something that production web apps must remedy.
+
+## Checkpoint
+
+Take a screenshot of your home page while logged in as `melinoe`.
