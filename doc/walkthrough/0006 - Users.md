@@ -2,10 +2,6 @@
 
 2024-07-28
 
-# Users
-
-2024-07-23
-
 This will be a long section. Authentication -- knowing who someone is -- is a critical part of most non-trivial web apps. Most web frameworks like Rails and Django have a way to handle this. Since we're not using a framework at all in Go, we don't have a built-in way to handle users.
 
 Thus it is part of our task in this walkthrough to explore the fundamentals of how a browser and a server can work together to remember who a user is. This will go deeper in the weeds than I originally planned, but you will emerge from these weeds as a stronger programmer.
