@@ -63,8 +63,26 @@ func productHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func loginHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		tmpl, err := template.ParseFiles("./templates/login.html")
+		if err != nil {
+			log.Fatal(err)
+		}
+		err = tmpl.Execute(w, nil)
+		if err != nil {
+			log.Fatal(err)
+		}
+	} else if r.Method == "POST" {
+		rUsername := r.FormValue("username")
+		cookie := http.Cookie{Name: "cafego_username", Value: rUsername}
+		http.SetCookie(w, &cookie)
+	}
+}
+
 func main() {
 	http.HandleFunc("/", indexHandler)
 	http.HandleFunc("/product/", productHandler)
+	http.HandleFunc("/login/", loginHandler)
 	http.ListenAndServe(":5000", nil)
 }

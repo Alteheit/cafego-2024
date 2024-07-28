@@ -127,3 +127,21 @@ func productHandler(w http.ResponseWriter, r *http.Request) {
 ```
 
 Yup, welcome to Go. I still think this is better than NodeJS. Do not mistake the quality of the experience of writing the code for the quality of the codebase that you produced.
+
+## Add links to the index page
+
+We still have to do one thing: add links to the product details from our index page. To do this, we'll need to know the ID of each product, since the ID goes at the end of each product link. Thankfully, we have easy access to it with `$p.Id` in our loop.
+
+Replace each list item with this:
+
+```html
+<li><a href="/product/{{ $p.Id }}">{{ $p.Name }}</a> - PHP {{ $p.Price }}</li>
+```
+
+An ugly solution, and I'm not sure there's a better approach. But that's the Go way.
+
+Reload your app. It should now at least function as a brochure website.
+
+## Checkpoint
+
+Submit two screenshots. The first screenshot should be of your home page. The second screenshot should be of your Macchiato page.
