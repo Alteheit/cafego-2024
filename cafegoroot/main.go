@@ -165,6 +165,20 @@ func cartHandler(w http.ResponseWriter, r *http.Request) {
 			CartItems: cartItems,
 		}
 		tmpl.Execute(w, pageData)
+	} else if r.Method == "POST" {
+		cookies := r.Cookies()
+		var sessionToken string
+		for _, cookie := range cookies {
+			if cookie.Name == "cafego_session" {
+				sessionToken = cookie.Value
+				break
+			}
+		}
+		user := getUserFromSessionToken(sessionToken)
+		// The rest of the function...
+		checkoutItemsForUser(user)
+		// Redirect
+		http.Redirect(w, r, "/", http.StatusFound)
 	}
 }
 

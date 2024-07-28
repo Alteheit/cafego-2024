@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"log"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -71,6 +72,8 @@ func initDB() {
 		"CREATE TABLE IF NOT EXISTS cgo_product (name TEXT, price INTEGER, description TEXT)",
 		"CREATE TABLE IF NOT EXISTS cgo_session (token TEXT, user_id INTEGER)",
 		"CREATE TABLE IF NOT EXISTS cgo_cart_item (product_id INTEGER, quantity INTEGER, user_id INTEGER)",
+		"CREATE TABLE IF NOT EXISTS cgo_transaction (user_id INTEGER, created_at TEXT)",
+		"CREATE TABLE IF NOT EXISTS cgo_line_item (transaction_id INTEGER, product_id INTEGER, quantity INTEGER)",
 	}
 	for _, q := range queries {
 		_, err := db.Exec(q)
@@ -220,4 +223,36 @@ func getCartItemsByUser(user User) []CartItem {
 		result = append(result, cartItem)
 	}
 	return result
+}
+
+func checkoutItemsForUser(user User) {
+	// Fetch cart items first
+	// We want to transform each of these into a line item
+	cartItems := getCartItemsByUser(user)
+	// Create a new transaction
+	now := time.Now().UTC()
+	q := "INSERT INTO cgo_transaction (user_id, created_at) VALUES (?, ?)"
+	// We need the first return value for once for the ID of the new transaction
+	res, err := database.Exec(q, user.Id, now)
+	if err != nil {
+		log.Fatal(err)
+	}
+	lastInsertId, err := res.LastInsertId()
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Transform each cart item into a line item
+	for _, ci := range cartItems {
+		var q string
+		q = "INSERT INTO cgo_line_item (transaction_id, product_id, quantity) VALUES (?, ?, ?)"
+		_, err = database.Exec(q, lastInsertId, ci.ProductId, ci.Quantity)
+		if err != nil {
+			log.Fatal(err)
+		}
+		q = "DELETE FROM cgo_cart_item WHERE rowid = ?"
+		_, err = database.Exec(q, ci.Id)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
 }
